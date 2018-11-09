@@ -65,6 +65,7 @@ typedef enum {
     STATE_RECEIVING,  ///< received a publish command (for input)
     STATE_SENDING,    ///< received a play command (for output)
     STATE_STOPPED,    ///< the broadcast has been stopped
+    STATE_STREAM_CREATED, /// < client has createStream
 } ClientState;
 
 typedef struct TrackedMethod {
@@ -76,6 +77,9 @@ typedef struct TrackedMethod {
 typedef struct RTMPContext {
     const AVClass *class;
     URLContext*   stream;                     ///< TCP stream used in interactions with RTMP server
+
+    char  input_stream_key[256];  // my updates
+
     RTMPPacket    *prev_pkt[2];               ///< packet history used when reading and sending packets ([0] for reading, [1] for writing)
     int           nb_prev_pkt[2];             ///< number of elements in prev_pkt
     int           in_chunk_size;              ///< size of the chunks incoming RTMP packets are divided into
@@ -1919,6 +1923,8 @@ static int send_invoke_response(URLContext *s, RTMPPacket *pkt)
         return AVERROR_INVALIDDATA;
     }
 
+    av_log(s, AV_LOG_DEBUG, " **** 222 INVOKE COMMAND START: %s \n", command);
+    
     ret = ff_amf_read_number(&gbc, &seqnum);
     if (ret)
         return ret;
@@ -1927,6 +1933,7 @@ static int send_invoke_response(URLContext *s, RTMPPacket *pkt)
         return ret;
     if (!strcmp(command, "FCPublish") ||
         !strcmp(command, "publish")) {
+         
         ret = ff_amf_read_string(&gbc, filename,
                                  sizeof(filename), &stringlen);
         if (ret) {
@@ -1936,6 +1943,15 @@ static int send_invoke_response(URLContext *s, RTMPPacket *pkt)
                 av_log(s, AV_LOG_ERROR, "Unable to parse stream name\n");
             return ret;
         }
+
+	if(rt->state != STATE_STREAM_CREATED){
+	  return 0;
+	}
+	
+	// my updates
+	strcpy(rt->input_stream_key, filename);
+	
+	
         // check with url
         if (s->filename) {
             pchar = strrchr(s->filename, '/');
@@ -1947,10 +1963,12 @@ static int send_invoke_response(URLContext *s, RTMPPacket *pkt)
             }
             pchar++;
             if (strcmp(pchar, filename))
-                av_log(s, AV_LOG_WARNING, "Unexpected stream %s, expecting"
+                av_log(s, AV_LOG_WARNING, "Unexpected stream FUCK  %s, expecting"
                        " %s\n", filename, pchar);
         }
-        rt->state = STATE_RECEIVING;
+
+	rt->state = STATE_RECEIVING;
+
     }
 
     if (!strcmp(command, "FCPublish")) {
@@ -1996,12 +2014,17 @@ static int send_invoke_response(URLContext *s, RTMPPacket *pkt)
             /* By now we don't control which streams are removed in
              * deleteStream. There is no stream creation control
              * if a client creates more than 2^32 - 2 streams. */
+
+	    rt->state = STATE_STREAM_CREATED;
         }
     }
     spkt.size = pp - spkt.data;
     ret = ff_rtmp_packet_write(rt->stream, &spkt, rt->out_chunk_size,
                                &rt->prev_pkt[1], &rt->nb_prev_pkt[1]);
     ff_rtmp_packet_destroy(&spkt);
+
+    av_log(s, AV_LOG_DEBUG, " **** INVOKE COMMAND END: %s \n", command);
+    
     return ret;
 }
 
