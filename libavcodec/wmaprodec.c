@@ -210,6 +210,7 @@ typedef struct WMAProDecodeCtx {
     int              subframe_offset;               ///< subframe offset in the bit reservoir
     uint8_t          packet_loss;                   ///< set in case of bitstream error
     uint8_t          packet_done;                   ///< set when a packet is fully decoded
+    uint8_t          eof_done;                      ///< set when EOF reached and extra subframe is written (XMA1/2)
 
     /* frame decode state */
     uint32_t         frame_num;                     ///< current frame number (not used for decoding)
@@ -436,7 +437,7 @@ static av_cold int decode_init(WMAProDecodeCtx *s, AVCodecContext *avctx, int nu
         av_log(avctx, AV_LOG_ERROR, "invalid number of channels per XMA stream %d\n",
                s->nb_channels);
         return AVERROR_INVALIDDATA;
-    } else if (s->nb_channels > WMAPRO_MAX_CHANNELS) {
+    } else if (s->nb_channels > WMAPRO_MAX_CHANNELS || s->nb_channels > avctx->channels) {
         avpriv_request_sample(avctx,
                               "More than %d channels", WMAPRO_MAX_CHANNELS);
         return AVERROR_PATCHWELCOME;
@@ -1609,7 +1610,34 @@ static int decode_packet(AVCodecContext *avctx, WMAProDecodeCtx *s,
 
     *got_frame_ptr = 0;
 
-    if (s->packet_done || s->packet_loss) {
+    if (!buf_size) {
+        AVFrame *frame = data;
+        int i;
+
+        /** Must output remaining samples after stream end. WMAPRO 5.1 created
+         * by XWMA encoder don't though (maybe only 1/2ch streams need it). */
+        s->packet_done = 0;
+        if (s->eof_done)
+            return 0;
+
+        /** clean output buffer and copy last IMDCT samples */
+        for (i = 0; i < s->nb_channels; i++) {
+            memset(frame->extended_data[i], 0,
+            s->samples_per_frame * sizeof(*s->channel[i].out));
+
+            memcpy(frame->extended_data[i], s->channel[i].out,
+                   s->samples_per_frame * sizeof(*s->channel[i].out) >> 1);
+        }
+
+        /* TODO: XMA should output 128 samples only (instead of 512) and WMAPRO
+         * maybe 768 (with 2048), XMA needs changes in multi-stream handling though. */
+
+        s->eof_done = 1;
+        s->packet_done = 1;
+        *got_frame_ptr = 1;
+        return 0;
+    }
+    else if (s->packet_done || s->packet_loss) {
         s->packet_done = 0;
 
         /** sanity check for the buffer length */
@@ -1860,12 +1888,14 @@ static av_cold int xma_decode_init(AVCodecContext *avctx)
         s->num_streams = avctx->extradata[1];
         if (avctx->extradata_size != (32 + ((avctx->extradata[0]==3)?0:8) + 4*s->num_streams)) {
             av_log(avctx, AV_LOG_ERROR, "Incorrect XMA2 extradata size\n");
+            s->num_streams = 0;
             return AVERROR(EINVAL);
         }
     } else if (avctx->codec_id == AV_CODEC_ID_XMA1 && avctx->extradata_size >= 4) { /* XMAWAVEFORMAT */
         s->num_streams = avctx->extradata[4];
         if (avctx->extradata_size != (8 + 20*s->num_streams)) {
             av_log(avctx, AV_LOG_ERROR, "Incorrect XMA1 extradata size\n");
+            s->num_streams = 0;
             return AVERROR(EINVAL);
         }
     } else {
@@ -1874,8 +1904,11 @@ static av_cold int xma_decode_init(AVCodecContext *avctx)
     }
 
     /* encoder supports up to 64 streams / 64*2 channels (would have to alloc arrays) */
-    if (avctx->channels > XMA_MAX_CHANNELS || s->num_streams > XMA_MAX_STREAMS) {
+    if (avctx->channels > XMA_MAX_CHANNELS || s->num_streams > XMA_MAX_STREAMS ||
+        s->num_streams <= 0
+    ) {
         avpriv_request_sample(avctx, "More than %d channels in %d streams", XMA_MAX_CHANNELS, s->num_streams);
+        s->num_streams = 0;
         return AVERROR_PATCHWELCOME;
     }
 
@@ -1908,6 +1941,7 @@ static av_cold int xma_decode_end(AVCodecContext *avctx)
         decode_end(&s->xma[i]);
         av_frame_free(&s->frames[i]);
     }
+    s->num_streams = 0;
 
     return 0;
 }
@@ -1922,6 +1956,7 @@ static void flush(WMAProDecodeCtx *s)
                sizeof(*s->channel[i].out));
     s->packet_loss = 1;
     s->skip_packets = 0;
+    s->eof_done = 0;
 }
 
 
@@ -1962,6 +1997,7 @@ AVCodec ff_wmapro_decoder = {
     .close          = wmapro_decode_end,
     .decode         = wmapro_decode_packet,
     .capabilities   = AV_CODEC_CAP_SUBFRAMES | AV_CODEC_CAP_DR1,
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
     .flush          = wmapro_flush,
     .sample_fmts    = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_FLTP,
                                                       AV_SAMPLE_FMT_NONE },
@@ -1976,7 +2012,8 @@ AVCodec ff_xma1_decoder = {
     .init           = xma_decode_init,
     .close          = xma_decode_end,
     .decode         = xma_decode_packet,
-    .capabilities   = AV_CODEC_CAP_SUBFRAMES | AV_CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_SUBFRAMES | AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY,
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
     .sample_fmts    = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_FLTP,
                                                       AV_SAMPLE_FMT_NONE },
 };
@@ -1991,7 +2028,8 @@ AVCodec ff_xma2_decoder = {
     .close          = xma_decode_end,
     .decode         = xma_decode_packet,
     .flush          = xma_flush,
-    .capabilities   = AV_CODEC_CAP_SUBFRAMES | AV_CODEC_CAP_DR1,
+    .capabilities   = AV_CODEC_CAP_SUBFRAMES | AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY,
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
     .sample_fmts    = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_FLTP,
                                                       AV_SAMPLE_FMT_NONE },
 };

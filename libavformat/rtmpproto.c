@@ -2409,7 +2409,7 @@ static int handle_metadata(RTMPContext *rt, RTMPPacket *pkt)
         next += size + 3 + 4;
     }
     if (p != rt->flv_data + rt->flv_size) {
-        av_log(NULL, AV_LOG_WARNING, "Incomplete flv packets in "
+        av_log(rt, AV_LOG_WARNING, "Incomplete flv packets in "
                                      "RTMP_PT_METADATA packet\n");
         rt->flv_size = p - rt->flv_data;
     }
@@ -2903,6 +2903,9 @@ reconnect:
     return 0;
 
 fail:
+    av_freep(&rt->playpath);
+    av_freep(&rt->tcurl);
+    av_freep(&rt->flashver);
     av_dict_free(opts);
     rtmp_close(s);
     return ret;

@@ -65,7 +65,7 @@ static int flac_write_block_comment(AVIOContext *pb, AVDictionary **m,
 
     ff_metadata_conv(m, ff_vorbiscomment_metadata_conv, NULL);
 
-    len = ff_vorbiscomment_length(*m, vendor);
+    len = ff_vorbiscomment_length(*m, vendor, NULL, 0);
     if (len >= ((1<<24) - 4))
         return AVERROR(EINVAL);
     p0 = av_malloc(len+4);
@@ -75,7 +75,7 @@ static int flac_write_block_comment(AVIOContext *pb, AVDictionary **m,
 
     bytestream_put_byte(&p, last_block ? 0x84 : 0x04);
     bytestream_put_be24(&p, len);
-    ff_vorbiscomment_write(&p, m, vendor);
+    ff_vorbiscomment_write(&p, m, vendor, NULL, 0);
 
     avio_write(pb, p0, len+4);
     av_freep(&p0);
@@ -348,9 +348,15 @@ static int flac_write_trailer(struct AVFormatContext *s)
         av_log(s, AV_LOG_WARNING, "unable to rewrite FLAC header.\n");
     }
 
-    av_freep(&c->streaminfo);
-
     return 0;
+}
+
+static void flac_deinit(struct AVFormatContext *s)
+{
+    FlacMuxerContext *c = s->priv_data;
+
+    ff_packet_list_free(&c->queue, &c->queue_end);
+    av_freep(&c->streaminfo);
 }
 
 static int flac_write_packet(struct AVFormatContext *s, AVPacket *pkt)
@@ -425,6 +431,7 @@ AVOutputFormat ff_flac_muxer = {
     .write_header      = flac_write_header,
     .write_packet      = flac_write_packet,
     .write_trailer     = flac_write_trailer,
+    .deinit            = flac_deinit,
     .flags             = AVFMT_NOTIMESTAMPS,
     .priv_class        = &flac_muxer_class,
 };

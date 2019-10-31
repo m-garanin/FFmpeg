@@ -47,7 +47,8 @@ void av_bsf_free(AVBSFContext **pctx)
 
     av_opt_free(ctx);
 
-    av_packet_free(&ctx->internal->buffer_pkt);
+    if (ctx->internal)
+        av_packet_free(&ctx->internal->buffer_pkt);
     av_freep(&ctx->internal);
     av_freep(&ctx->priv_data);
 
@@ -306,7 +307,6 @@ static int bsf_list_filter(AVBSFContext *bsf, AVPacket *out)
             ret = av_bsf_receive_packet(lst->bsfs[lst->idx-1], out);
             if (ret == AVERROR(EAGAIN)) {
                 /* no more packets from idx-1, try with previous */
-                ret = 0;
                 lst->idx--;
                 continue;
             } else if (ret == AVERROR_EOF) {
@@ -348,6 +348,15 @@ static int bsf_list_filter(AVBSFContext *bsf, AVPacket *out)
         av_packet_unref(out);
 
     return ret;
+}
+
+static void bsf_list_flush(AVBSFContext *bsf)
+{
+    BSFListContext *lst = bsf->priv_data;
+
+    for (int i = 0; i < lst->nb_bsfs; i++)
+        av_bsf_flush(lst->bsfs[i]);
+    lst->idx = lst->flushed_idx = 0;
 }
 
 static void bsf_list_close(AVBSFContext *bsf)
@@ -398,6 +407,7 @@ const AVBitStreamFilter ff_list_bsf = {
         .priv_class     = &bsf_list_class,
         .init           = bsf_list_init,
         .filter         = bsf_list_filter,
+        .flush          = bsf_list_flush,
         .close          = bsf_list_close,
 };
 

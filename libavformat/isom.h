@@ -87,6 +87,7 @@ typedef struct MOVAtom {
 struct MOVParseTableEntry;
 
 typedef struct MOVFragment {
+    int found_tfhd;
     unsigned track_id;
     uint64_t base_data_offset;
     uint64_t moof_offset;
@@ -162,6 +163,8 @@ typedef struct MOVStreamContext {
     int64_t *chunk_offsets;
     unsigned int stts_count;
     MOVStts *stts_data;
+    unsigned int sdtp_count;
+    uint8_t *sdtp_data;
     unsigned int ctts_count;
     unsigned int ctts_allocated_size;
     MOVStts *ctts_data;

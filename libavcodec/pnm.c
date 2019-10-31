@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "libavutil/avassert.h"
 #include "libavutil/imgutils.h"
 #include "avcodec.h"
 #include "internal.h"
@@ -36,13 +37,15 @@ static void pnm_get(PNMContext *sc, char *str, int buf_size)
 {
     char *s;
     int c;
+    uint8_t *bs  = sc->bytestream;
+    const uint8_t *end = sc->bytestream_end;
 
     /* skip spaces and comments */
-    while (sc->bytestream < sc->bytestream_end) {
-        c = *sc->bytestream++;
+    while (bs < end) {
+        c = *bs++;
         if (c == '#')  {
-            while (c != '\n' && sc->bytestream < sc->bytestream_end) {
-                c = *sc->bytestream++;
+            while (c != '\n' && bs < end) {
+                c = *bs++;
             }
         } else if (!pnm_space(c)) {
             break;
@@ -50,12 +53,12 @@ static void pnm_get(PNMContext *sc, char *str, int buf_size)
     }
 
     s = str;
-    while (sc->bytestream < sc->bytestream_end && !pnm_space(c)) {
-        if ((s - str)  < buf_size - 1)
-            *s++ = c;
-        c = *sc->bytestream++;
+    while (bs < end && !pnm_space(c) && (s - str) < buf_size - 1) {
+        *s++ = c;
+        c = *bs++;
     }
     *s = '\0';
+    sc->bytestream = bs;
 }
 
 int ff_pnm_decode_header(AVCodecContext *avctx, PNMContext * const s)
@@ -64,9 +67,15 @@ int ff_pnm_decode_header(AVCodecContext *avctx, PNMContext * const s)
     int h, w, depth, maxval;
     int ret;
 
-    pnm_get(s, buf1, sizeof(buf1));
-    if(buf1[0] != 'P')
+    if (s->bytestream_end - s->bytestream < 3 ||
+        s->bytestream[0] != 'P' ||
+        s->bytestream[1] < '1'  ||
+        s->bytestream[1] > '7') {
+        s->bytestream += s->bytestream_end > s->bytestream;
+        s->bytestream += s->bytestream_end > s->bytestream;
         return AVERROR_INVALIDDATA;
+    }
+    pnm_get(s, buf1, sizeof(buf1));
     s->type= buf1[1]-'0';
 
     if (s->type==1 || s->type==4) {
@@ -148,7 +157,7 @@ int ff_pnm_decode_header(AVCodecContext *avctx, PNMContext * const s)
         }
         return 0;
     } else {
-        return AVERROR_INVALIDDATA;
+        av_assert0(0);
     }
     pnm_get(s, buf1, sizeof(buf1));
     w = atoi(buf1);

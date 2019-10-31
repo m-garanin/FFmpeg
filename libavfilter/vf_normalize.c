@@ -76,9 +76,21 @@
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "avfilter.h"
+#include "drawutils.h"
 #include "formats.h"
 #include "internal.h"
 #include "video.h"
+
+typedef struct NormalizeHistory {
+    uint8_t *history;       // History entries.
+    uint32_t history_sum;   // Sum of history entries.
+} NormalizeHistory;
+
+typedef struct NormalizeLocal {
+    uint8_t in;     // Original input byte value for this frame.
+    float smoothed; // Smoothed input value [0,255].
+    float out;      // Output value [0,255]
+} NormalizeLocal;
 
 typedef struct NormalizeContext {
     const AVClass *class;
@@ -90,16 +102,14 @@ typedef struct NormalizeContext {
     float independence;
     float strength;
 
-    int co[4];          // Offsets to R,G,B,A bytes respectively in each pixel
+    uint8_t co[4];      // Offsets to R,G,B,A bytes respectively in each pixel
     int num_components; // Number of components in the pixel format
+    int step;
     int history_len;    // Number of frames to average; based on smoothing factor
     int frame_num;      // Increments on each frame, starting from 0.
 
     // Per-extremum, per-channel history, for temporal smoothing.
-    struct {
-        uint8_t *history;       // History entries.
-        uint32_t history_sum;   // Sum of history entries.
-    } min[3], max[3];           // Min and max for each channel in {R,G,B}.
+    NormalizeHistory min[3], max[3];           // Min and max for each channel in {R,G,B}.
     uint8_t *history_mem;       // Single allocation for above history entries
 
 } NormalizeContext;
@@ -124,11 +134,7 @@ AVFILTER_DEFINE_CLASS(normalize);
 static void normalize(NormalizeContext *s, AVFrame *in, AVFrame *out)
 {
     // Per-extremum, per-channel local variables.
-    struct {
-        uint8_t in;     // Original input byte value for this frame.
-        float smoothed; // Smoothed input value [0,255].
-        float out;      // Output value [0,255].
-    } min[3], max[3];   // Min and max for each channel in {R,G,B}.
+    NormalizeLocal min[3], max[3];   // Min and max for each channel in {R,G,B}.
 
     float rgb_min_smoothed; // Min input range for linked normalization
     float rgb_max_smoothed; // Max input range for linked normalization
@@ -141,14 +147,12 @@ static void normalize(NormalizeContext *s, AVFrame *in, AVFrame *out)
         min[c].in = max[c].in = in->data[0][s->co[c]];
     for (y = 0; y < in->height; y++) {
         uint8_t *inp = in->data[0] + y * in->linesize[0];
-        uint8_t *outp = out->data[0] + y * out->linesize[0];
         for (x = 0; x < in->width; x++) {
             for (c = 0; c < 3; c++) {
                 min[c].in = FFMIN(min[c].in, inp[s->co[c]]);
                 max[c].in = FFMAX(max[c].in, inp[s->co[c]]);
             }
-            inp += s->num_components;
-            outp += s->num_components;
+            inp += s->step;
         }
     }
 
@@ -237,8 +241,8 @@ static void normalize(NormalizeContext *s, AVFrame *in, AVFrame *out)
             if (s->num_components == 4)
                 // Copy alpha as-is.
                 outp[s->co[3]] = inp[s->co[3]];
-            inp += s->num_components;
-            outp += s->num_components;
+            inp += s->step;
+            outp += s->step;
         }
     }
 
@@ -286,9 +290,9 @@ static int config_input(AVFilterLink *inlink)
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(inlink->format);
     int c;
 
-    for (c = 0; c < 4; ++c)
-        s->co[c] = desc->comp[c].offset;
+    ff_fill_rgba_map(s->co, inlink->format);
     s->num_components = desc->nb_components;
+    s->step = av_get_padded_bits_per_pixel(desc) >> 3;
     // Convert smoothing value to history_len (a count of frames to average,
     // must be at least 1).  Currently this is a direct assignment, but the
     // smoothing value was originally envisaged as a number of seconds.  In
@@ -383,4 +387,5 @@ AVFilter ff_vf_normalize = {
     .query_formats = query_formats,
     .inputs        = inputs,
     .outputs       = outputs,
+    .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL,
 };

@@ -81,7 +81,7 @@ typedef struct FourxmDemuxContext {
     AVRational fps;
 } FourxmDemuxContext;
 
-static int fourxm_probe(AVProbeData *p)
+static int fourxm_probe(const AVProbeData *p)
 {
     if ((AV_RL32(&p->buf[0]) != RIFF_TAG) ||
         (AV_RL32(&p->buf[8]) != FOURXMV_TAG))
@@ -241,7 +241,8 @@ static int fourxm_read_header(AVFormatContext *s)
         size       = AV_RL32(&header[i + 4]);
         if (size > header_size - i - 8 && (fourcc_tag == vtrk_TAG || fourcc_tag == strk_TAG)) {
             av_log(s, AV_LOG_ERROR, "chunk larger than array %d>%d\n", size, header_size - i - 8);
-            return AVERROR_INVALIDDATA;
+            ret = AVERROR_INVALIDDATA;
+            goto fail;
         }
 
         if (fourcc_tag == std__TAG) {

@@ -93,6 +93,10 @@ fate-copy-trac2211-avi: $(TARGET_SAMPLES)/h264/bbc2.sample.h264
 fate-copy-trac2211-avi: CMD = transcode "h264 -r 14" $(TARGET_SAMPLES)/h264/bbc2.sample.h264\
                           avi "-c:a copy -c:v copy"
 
+FATE_STREAMCOPY-$(call ENCDEC, APNG, APNG) += fate-copy-apng
+fate-copy-apng: fate-lavf-apng
+fate-copy-apng: CMD = transcode apng tests/data/lavf/lavf.apng apng "-c:v copy"
+
 FATE_STREAMCOPY-$(call DEMMUX, OGG, OGG) += fate-limited_input_seek fate-limited_input_seek-copyts
 fate-limited_input_seek: $(TARGET_SAMPLES)/vorbis/moog_small.ogg
 fate-limited_input_seek: CMD = md5 -ss 1.5 -t 1.3 -i $(TARGET_SAMPLES)/vorbis/moog_small.ogg -c:a copy -fflags +bitexact -f ogg
@@ -103,6 +107,10 @@ FATE_STREAMCOPY-$(call ALLYES, MOV_DEMUXER MOV_MUXER) += fate-copy-psp
 fate-copy-psp: $(TARGET_SAMPLES)/h264/wwwq_cut.mp4
 fate-copy-psp: CMD = transcode "mov" $(TARGET_SAMPLES)/h264/wwwq_cut.mp4\
                       psp "-c copy" "-codec copy"
+
+FATE_STREAMCOPY-$(CONFIG_FLV_DEMUXER) += fate-ffmpeg-streamloop
+fate-ffmpeg-streamloop: $(TARGET_SAMPLES)/flv/streamloop.flv
+fate-ffmpeg-streamloop: CMD = framemd5 -stream_loop 2 -i $(TARGET_SAMPLES)/flv/streamloop.flv -c copy
 
 fate-streamcopy: $(FATE_STREAMCOPY-yes)
 

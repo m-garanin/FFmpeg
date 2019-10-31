@@ -29,6 +29,7 @@
 #include "isom.h"
 #include "id3v2.h"
 #include "mov_chan.h"
+#include "replaygain.h"
 
 #define AIFF                    0
 #define AIFF_C_VERSION1         0xA2805140
@@ -189,7 +190,7 @@ static int get_aiff_header(AVFormatContext *s, int size,
     return num_frames;
 }
 
-static int aiff_probe(AVProbeData *p)
+static int aiff_probe(const AVProbeData *p)
 {
     /* check file header */
     if (p->buf[0] == 'F' && p->buf[1] == 'O' &&
@@ -242,7 +243,10 @@ static int aiff_read_header(AVFormatContext *s)
         if (size < 0)
             return size;
 
-        filesize -= size + 8;
+        if (size >= 0x7fffffff - 8)
+            filesize = 0;
+        else
+            filesize -= size + 8;
 
         switch (tag) {
         case MKTAG('C', 'O', 'M', 'M'):     /* Common chunk */
@@ -347,6 +351,10 @@ static int aiff_read_header(AVFormatContext *s)
             avio_skip(pb, 1);
         }
     }
+
+    ret = ff_replaygain_export(st, s->metadata);
+    if (ret < 0)
+        return ret;
 
 got_sound:
     if (!st->codecpar->block_align && st->codecpar->codec_id == AV_CODEC_ID_QCELP) {

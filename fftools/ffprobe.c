@@ -165,6 +165,8 @@ typedef enum {
     SECTION_ID_FRAME_TAGS,
     SECTION_ID_FRAME_SIDE_DATA_LIST,
     SECTION_ID_FRAME_SIDE_DATA,
+    SECTION_ID_FRAME_SIDE_DATA_TIMECODE_LIST,
+    SECTION_ID_FRAME_SIDE_DATA_TIMECODE,
     SECTION_ID_FRAME_LOG,
     SECTION_ID_FRAME_LOGS,
     SECTION_ID_LIBRARY_VERSION,
@@ -209,7 +211,9 @@ static struct section sections[] = {
     [SECTION_ID_FRAME] =              { SECTION_ID_FRAME, "frame", 0, { SECTION_ID_FRAME_TAGS, SECTION_ID_FRAME_SIDE_DATA_LIST, SECTION_ID_FRAME_LOGS, -1 } },
     [SECTION_ID_FRAME_TAGS] =         { SECTION_ID_FRAME_TAGS, "tags", SECTION_FLAG_HAS_VARIABLE_FIELDS, { -1 }, .element_name = "tag", .unique_name = "frame_tags" },
     [SECTION_ID_FRAME_SIDE_DATA_LIST] ={ SECTION_ID_FRAME_SIDE_DATA_LIST, "side_data_list", SECTION_FLAG_IS_ARRAY, { SECTION_ID_FRAME_SIDE_DATA, -1 }, .element_name = "side_data", .unique_name = "frame_side_data_list" },
-    [SECTION_ID_FRAME_SIDE_DATA] =     { SECTION_ID_FRAME_SIDE_DATA, "side_data", 0, { -1 } },
+    [SECTION_ID_FRAME_SIDE_DATA] =     { SECTION_ID_FRAME_SIDE_DATA, "side_data", 0, { SECTION_ID_FRAME_SIDE_DATA_TIMECODE_LIST, -1 } },
+    [SECTION_ID_FRAME_SIDE_DATA_TIMECODE_LIST] =     { SECTION_ID_FRAME_SIDE_DATA_TIMECODE_LIST, "timecodes", SECTION_FLAG_IS_ARRAY, { SECTION_ID_FRAME_SIDE_DATA_TIMECODE, -1 } },
+    [SECTION_ID_FRAME_SIDE_DATA_TIMECODE] =     { SECTION_ID_FRAME_SIDE_DATA_TIMECODE, "timecode", 0, { -1 } },
     [SECTION_ID_FRAME_LOGS] =         { SECTION_ID_FRAME_LOGS, "logs", SECTION_FLAG_IS_ARRAY, { SECTION_ID_FRAME_LOG, -1 } },
     [SECTION_ID_FRAME_LOG] =          { SECTION_ID_FRAME_LOG, "log", 0, { -1 },  },
     [SECTION_ID_LIBRARY_VERSIONS] =   { SECTION_ID_LIBRARY_VERSIONS, "library_versions", SECTION_FLAG_IS_ARRAY, { SECTION_ID_LIBRARY_VERSION, -1 } },
@@ -1531,7 +1535,7 @@ static void json_print_section_header(WriterContext *wctx)
             if (parent_section && parent_section->id == SECTION_ID_PACKETS_AND_FRAMES) {
                 if (!json->compact)
                     JSON_INDENT();
-                printf("\"type\": \"%s\"%s", section->name, json->item_sep);
+                printf("\"type\": \"%s\"", section->name);
             }
         }
         av_bprint_finalize(&buf, NULL);
@@ -1575,8 +1579,10 @@ static inline void json_print_item_str(WriterContext *wctx,
 static void json_print_str(WriterContext *wctx, const char *key, const char *value)
 {
     JSONContext *json = wctx->priv;
+    const struct section *parent_section = wctx->level ?
+        wctx->section[wctx->level-1] : NULL;
 
-    if (wctx->nb_item[wctx->level])
+    if (wctx->nb_item[wctx->level] || (parent_section && parent_section->id == SECTION_ID_PACKETS_AND_FRAMES))
         printf("%s", json->item_sep);
     if (!json->compact)
         JSON_INDENT();
@@ -1586,9 +1592,11 @@ static void json_print_str(WriterContext *wctx, const char *key, const char *val
 static void json_print_int(WriterContext *wctx, const char *key, long long int value)
 {
     JSONContext *json = wctx->priv;
+    const struct section *parent_section = wctx->level ?
+        wctx->section[wctx->level-1] : NULL;
     AVBPrint buf;
 
-    if (wctx->nb_item[wctx->level])
+    if (wctx->nb_item[wctx->level] || (parent_section && parent_section->id == SECTION_ID_PACKETS_AND_FRAMES))
         printf("%s", json->item_sep);
     if (!json->compact)
         JSON_INDENT();
@@ -2199,6 +2207,18 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
                 char tcbuf[AV_TIMECODE_STR_SIZE];
                 av_timecode_make_mpeg_tc_string(tcbuf, *(int64_t *)(sd->data));
                 print_str("timecode", tcbuf);
+            } else if (sd->type == AV_FRAME_DATA_S12M_TIMECODE && sd->size == 16) {
+                uint32_t *tc = (uint32_t*)sd->data;
+                int m = FFMIN(tc[0],3);
+                writer_print_section_header(w, SECTION_ID_FRAME_SIDE_DATA_TIMECODE_LIST);
+                for (int j = 1; j <= m ; j++) {
+                    char tcbuf[AV_TIMECODE_STR_SIZE];
+                    av_timecode_make_smpte_tc_string(tcbuf, tc[j], 0);
+                    writer_print_section_header(w, SECTION_ID_FRAME_SIDE_DATA_TIMECODE);
+                    print_str("value", tcbuf);
+                    writer_print_section_footer(w);
+                }
+                writer_print_section_footer(w);
             } else if (sd->type == AV_FRAME_DATA_MASTERING_DISPLAY_METADATA) {
                 AVMasteringDisplayMetadata *metadata = (AVMasteringDisplayMetadata *)sd->data;
 
@@ -2413,9 +2433,7 @@ static int read_interval_packets(WriterContext *w, InputFile *ifile,
         }
         av_packet_unref(&pkt);
     }
-    av_init_packet(&pkt);
-    pkt.data = NULL;
-    pkt.size = 0;
+    av_packet_unref(&pkt);
     //Flush remaining frames that are cached in the decoder
     for (i = 0; i < fmt_ctx->nb_streams; i++) {
         pkt.stream_index = i;
@@ -2646,20 +2664,20 @@ static int show_stream(WriterContext *w, AVFormatContext *fmt_ctx, int stream_id
     } while (0)
 
     if (do_show_stream_disposition) {
-    writer_print_section_header(w, in_program ? SECTION_ID_PROGRAM_STREAM_DISPOSITION : SECTION_ID_STREAM_DISPOSITION);
-    PRINT_DISPOSITION(DEFAULT,          "default");
-    PRINT_DISPOSITION(DUB,              "dub");
-    PRINT_DISPOSITION(ORIGINAL,         "original");
-    PRINT_DISPOSITION(COMMENT,          "comment");
-    PRINT_DISPOSITION(LYRICS,           "lyrics");
-    PRINT_DISPOSITION(KARAOKE,          "karaoke");
-    PRINT_DISPOSITION(FORCED,           "forced");
-    PRINT_DISPOSITION(HEARING_IMPAIRED, "hearing_impaired");
-    PRINT_DISPOSITION(VISUAL_IMPAIRED,  "visual_impaired");
-    PRINT_DISPOSITION(CLEAN_EFFECTS,    "clean_effects");
-    PRINT_DISPOSITION(ATTACHED_PIC,     "attached_pic");
-    PRINT_DISPOSITION(TIMED_THUMBNAILS, "timed_thumbnails");
-    writer_print_section_footer(w);
+        writer_print_section_header(w, in_program ? SECTION_ID_PROGRAM_STREAM_DISPOSITION : SECTION_ID_STREAM_DISPOSITION);
+        PRINT_DISPOSITION(DEFAULT,          "default");
+        PRINT_DISPOSITION(DUB,              "dub");
+        PRINT_DISPOSITION(ORIGINAL,         "original");
+        PRINT_DISPOSITION(COMMENT,          "comment");
+        PRINT_DISPOSITION(LYRICS,           "lyrics");
+        PRINT_DISPOSITION(KARAOKE,          "karaoke");
+        PRINT_DISPOSITION(FORCED,           "forced");
+        PRINT_DISPOSITION(HEARING_IMPAIRED, "hearing_impaired");
+        PRINT_DISPOSITION(VISUAL_IMPAIRED,  "visual_impaired");
+        PRINT_DISPOSITION(CLEAN_EFFECTS,    "clean_effects");
+        PRINT_DISPOSITION(ATTACHED_PIC,     "attached_pic");
+        PRINT_DISPOSITION(TIMED_THUMBNAILS, "timed_thumbnails");
+        writer_print_section_footer(w);
     }
 
     if (do_show_stream_tags)
@@ -3457,7 +3475,7 @@ static int opt_sections(void *optctx, const char *opt, const char *arg)
     return 0;
 }
 
-static int opt_show_versions(const char *opt, const char *arg)
+static int opt_show_versions(void *optctx, const char *opt, const char *arg)
 {
     mark_section_show_entries(SECTION_ID_PROGRAM_VERSION, 1, NULL);
     mark_section_show_entries(SECTION_ID_LIBRARY_VERSION, 1, NULL);
@@ -3465,7 +3483,7 @@ static int opt_show_versions(const char *opt, const char *arg)
 }
 
 #define DEFINE_OPT_SHOW_SECTION(section, target_section_id)             \
-    static int opt_show_##section(const char *opt, const char *arg)     \
+    static int opt_show_##section(void *optctx, const char *opt, const char *arg) \
     {                                                                   \
         mark_section_show_entries(SECTION_ID_##target_section_id, 1, NULL); \
         return 0;                                                       \
@@ -3500,9 +3518,9 @@ static const OptionDef real_options[] = {
     { "sections", OPT_EXIT, {.func_arg = opt_sections}, "print sections structure and section information, and exit" },
     { "show_data",    OPT_BOOL, {(void*)&do_show_data}, "show packets data" },
     { "show_data_hash", OPT_STRING | HAS_ARG, {(void*)&show_data_hash}, "show packets data hash" },
-    { "show_error",   0, {(void*)&opt_show_error},  "show probing error" },
-    { "show_format",  0, {(void*)&opt_show_format}, "show format/container info" },
-    { "show_frames",  0, {(void*)&opt_show_frames}, "show frames info" },
+    { "show_error",   0, { .func_arg = &opt_show_error },  "show probing error" },
+    { "show_format",  0, { .func_arg = &opt_show_format }, "show format/container info" },
+    { "show_frames",  0, { .func_arg = &opt_show_frames }, "show frames info" },
     { "show_format_entry", HAS_ARG, {.func_arg = opt_show_format_entry},
       "show a particular entry from the format/container info", "entry" },
     { "show_entries", HAS_ARG, {.func_arg = opt_show_entries},
@@ -3510,16 +3528,16 @@ static const OptionDef real_options[] = {
 #if HAVE_THREADS
     { "show_log", OPT_INT|HAS_ARG, {(void*)&do_show_log}, "show log" },
 #endif
-    { "show_packets", 0, {(void*)&opt_show_packets}, "show packets info" },
-    { "show_programs", 0, {(void*)&opt_show_programs}, "show programs info" },
-    { "show_streams", 0, {(void*)&opt_show_streams}, "show streams info" },
-    { "show_chapters", 0, {(void*)&opt_show_chapters}, "show chapters info" },
+    { "show_packets", 0, { .func_arg = &opt_show_packets }, "show packets info" },
+    { "show_programs", 0, { .func_arg = &opt_show_programs }, "show programs info" },
+    { "show_streams", 0, { .func_arg = &opt_show_streams }, "show streams info" },
+    { "show_chapters", 0, { .func_arg = &opt_show_chapters }, "show chapters info" },
     { "count_frames", OPT_BOOL, {(void*)&do_count_frames}, "count the number of frames per stream" },
     { "count_packets", OPT_BOOL, {(void*)&do_count_packets}, "count the number of packets per stream" },
-    { "show_program_version",  0, {(void*)&opt_show_program_version},  "show ffprobe version" },
-    { "show_library_versions", 0, {(void*)&opt_show_library_versions}, "show library versions" },
-    { "show_versions",         0, {(void*)&opt_show_versions}, "show program and library versions" },
-    { "show_pixel_formats", 0, {(void*)&opt_show_pixel_formats}, "show pixel format descriptions" },
+    { "show_program_version",  0, { .func_arg = &opt_show_program_version },  "show ffprobe version" },
+    { "show_library_versions", 0, { .func_arg = &opt_show_library_versions }, "show library versions" },
+    { "show_versions",         0, { .func_arg = &opt_show_versions }, "show program and library versions" },
+    { "show_pixel_formats", 0, { .func_arg = &opt_show_pixel_formats }, "show pixel format descriptions" },
     { "show_private_data", OPT_BOOL, {(void*)&show_private_data}, "show private data" },
     { "private",           OPT_BOOL, {(void*)&show_private_data}, "same as show_private_data" },
     { "bitexact", OPT_BOOL, {&do_bitexact}, "force bitexact output" },
