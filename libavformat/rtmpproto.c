@@ -48,7 +48,6 @@
 #endif
 
 #define APP_MAX_LENGTH 1024
-#define PLAYPATH_MAX_LENGTH 512
 #define TCURL_MAX_LENGTH 1024
 #define FLASHVER_MAX_LENGTH 64
 #define RTMP_PKTDATA_DEFAULT_SIZE 4096
@@ -168,7 +167,7 @@ static int add_tracked_method(RTMPContext *rt, const char *name, int id)
 
     if (rt->nb_tracked_methods + 1 > rt->tracked_methods_size) {
         rt->tracked_methods_size = (rt->nb_tracked_methods + 1) * 2;
-        if ((err = av_reallocp(&rt->tracked_methods, rt->tracked_methods_size *
+        if ((err = av_reallocp_array(&rt->tracked_methods, rt->tracked_methods_size,
                                sizeof(*rt->tracked_methods))) < 0) {
             rt->nb_tracked_methods = 0;
             rt->tracked_methods_size = 0;
@@ -1116,7 +1115,7 @@ static int rtmp_calc_swfhash(URLContext *s)
     RTMPContext *rt = s->priv_data;
     uint8_t *in_data = NULL, *out_data = NULL, *swfdata;
     int64_t in_size;
-    URLContext *stream;
+    URLContext *stream = NULL;
     char swfhash[32];
     int swfsize;
     int ret = 0;
@@ -2535,7 +2534,7 @@ static int rtmp_close(URLContext *h)
 
     free_tracked_methods(rt);
     av_freep(&rt->flv_data);
-    ffurl_close(rt->stream);
+    ffurl_closep(&rt->stream);
     return ret;
 }
 
@@ -2769,7 +2768,10 @@ reconnect:
     }
 
     if (!rt->playpath) {
-        rt->playpath = av_malloc(PLAYPATH_MAX_LENGTH);
+        int max_len = 1;
+        if (fname)
+            max_len = strlen(fname) + 5; // add prefix "mp4:"
+        rt->playpath = av_malloc(max_len);
         if (!rt->playpath) {
             ret = AVERROR(ENOMEM);
             goto fail;
@@ -2786,7 +2788,7 @@ reconnect:
                     fname[len - 4] = '\0';
                 rt->playpath[0] = 0;
             }
-            av_strlcat(rt->playpath, fname, PLAYPATH_MAX_LENGTH);
+            av_strlcat(rt->playpath, fname, max_len);
         } else {
             rt->playpath[0] = '\0';
         }
@@ -2845,8 +2847,7 @@ reconnect:
 
     if (rt->do_reconnect) {
         int i;
-        ffurl_close(rt->stream);
-        rt->stream       = NULL;
+        ffurl_closep(&rt->stream);
         rt->do_reconnect = 0;
         rt->nb_invokes   = 0;
         for (i = 0; i < 2; i++)
@@ -3141,7 +3142,8 @@ static const AVOption rtmp_options[] = {
     { NULL },
 };
 
-#define RTMP_PROTOCOL(flavor)                    \
+#define RTMP_PROTOCOL_0(flavor)
+#define RTMP_PROTOCOL_1(flavor)                  \
 static const AVClass flavor##_class = {          \
     .class_name = #flavor,                       \
     .item_name  = av_default_item_name,          \
@@ -3161,11 +3163,16 @@ const URLProtocol ff_##flavor##_protocol = {     \
     .flags          = URL_PROTOCOL_FLAG_NETWORK, \
     .priv_data_class= &flavor##_class,           \
 };
+#define RTMP_PROTOCOL_2(flavor, enabled)         \
+    RTMP_PROTOCOL_ ## enabled(flavor)
+#define RTMP_PROTOCOL_3(flavor, config)          \
+    RTMP_PROTOCOL_2(flavor, config)
+#define RTMP_PROTOCOL(flavor, uppercase)         \
+    RTMP_PROTOCOL_3(flavor, CONFIG_ ## uppercase ## _PROTOCOL)
 
-
-RTMP_PROTOCOL(rtmp)
-RTMP_PROTOCOL(rtmpe)
-RTMP_PROTOCOL(rtmps)
-RTMP_PROTOCOL(rtmpt)
-RTMP_PROTOCOL(rtmpte)
-RTMP_PROTOCOL(rtmpts)
+RTMP_PROTOCOL(rtmp,   RTMP)
+RTMP_PROTOCOL(rtmpe,  RTMPE)
+RTMP_PROTOCOL(rtmps,  RTMPS)
+RTMP_PROTOCOL(rtmpt,  RTMPT)
+RTMP_PROTOCOL(rtmpte, RTMPTE)
+RTMP_PROTOCOL(rtmpts, RTMPTS)

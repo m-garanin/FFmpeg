@@ -253,6 +253,9 @@ static int rpl_read_header(AVFormatContext *s)
             error |= read_line(pb, line, sizeof(line));
     }
 
+    if (s->nb_streams == 0)
+        return AVERROR_INVALIDDATA;
+
     rpl->frames_per_chunk = read_line_and_int(pb, &error);  // video frames per chunk
     if (vst && rpl->frames_per_chunk > 1 && vst->codecpar->codec_tag != 124)
         av_log(s, AV_LOG_WARNING,
@@ -314,10 +317,10 @@ static int rpl_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     stream = s->streams[rpl->chunk_part];
 
-    if (rpl->chunk_number >= stream->nb_index_entries)
+    if (rpl->chunk_number >= stream->internal->nb_index_entries)
         return AVERROR_EOF;
 
-    index_entry = &stream->index_entries[rpl->chunk_number];
+    index_entry = &stream->internal->index_entries[rpl->chunk_number];
 
     if (rpl->frame_in_part == 0)
         if (avio_seek(pb, index_entry->pos, SEEK_SET) < 0)
@@ -338,7 +341,6 @@ static int rpl_read_packet(AVFormatContext *s, AVPacket *pkt)
         if (ret < 0)
             return ret;
         if (ret != frame_size) {
-            av_packet_unref(pkt);
             return AVERROR(EIO);
         }
         pkt->duration = 1;
@@ -355,7 +357,6 @@ static int rpl_read_packet(AVFormatContext *s, AVPacket *pkt)
         if (ret < 0)
             return ret;
         if (ret != index_entry->size) {
-            av_packet_unref(pkt);
             return AVERROR(EIO);
         }
 

@@ -313,8 +313,10 @@ static int init_out_session(AVFilterContext *ctx)
         }
     }
 
-    if (err != MFX_ERR_NONE) {
-        av_log(ctx, AV_LOG_ERROR, "Error getting the session handle\n");
+    if (err < 0)
+        return ff_qsvvpp_print_error(ctx, err, "Error getting the session handle");
+    else if (err > 0) {
+        ff_qsvvpp_print_warning(ctx, err, "Warning in getting the session handle");
         return AVERROR_UNKNOWN;
     }
 
@@ -410,7 +412,7 @@ static int init_out_session(AVFilterContext *ctx)
     s->scale_conf.Header.BufferSz     = sizeof(mfxExtVPPScaling);
     s->scale_conf.ScalingMode         = s->mode;
     s->ext_buffers[s->num_ext_buf++]  = (mfxExtBuffer*)&s->scale_conf;
-    av_log(ctx, AV_LOG_VERBOSE, "Scaling mode: %"PRIu16"\n", s->mode);
+    av_log(ctx, AV_LOG_VERBOSE, "Scaling mode: %d\n", s->mode);
 #endif
 
     par.ExtParam    = s->ext_buffers;
@@ -430,9 +432,17 @@ static int init_out_session(AVFilterContext *ctx)
     par.vpp.Out.FrameRateExtN = 25;
     par.vpp.Out.FrameRateExtD = 1;
 
+    /* Print input memory mode */
+    ff_qsvvpp_print_iopattern(ctx, par.IOPattern & 0x0F, "VPP");
+    /* Print output memory mode */
+    ff_qsvvpp_print_iopattern(ctx, par.IOPattern & 0xF0, "VPP");
     err = MFXVideoVPP_Init(s->session, &par);
-    if (err != MFX_ERR_NONE) {
-        av_log(ctx, AV_LOG_ERROR, "Error opening the VPP for scaling\n");
+    if (err < 0)
+        return ff_qsvvpp_print_error(ctx, err,
+                                     "Error opening the VPP for scaling");
+    else if (err > 0) {
+        ff_qsvvpp_print_warning(ctx, err,
+                                "Warning in VPP initialization");
         return AVERROR_UNKNOWN;
     }
 
@@ -573,8 +583,13 @@ static int qsvscale_filter_frame(AVFilterLink *link, AVFrame *in)
             av_usleep(1);
     } while (err == MFX_WRN_DEVICE_BUSY);
 
-    if (err < 0 || !sync) {
-        av_log(ctx, AV_LOG_ERROR, "Error during scaling\n");
+    if (err < 0) {
+        ret = ff_qsvvpp_print_error(ctx, err, "Error during scaling");
+        goto fail;
+    }
+
+    if (!sync) {
+        av_log(ctx, AV_LOG_ERROR, "No sync during scaling\n");
         ret = AVERROR_UNKNOWN;
         goto fail;
     }
@@ -583,8 +598,7 @@ static int qsvscale_filter_frame(AVFilterLink *link, AVFrame *in)
         err = MFXVideoCORE_SyncOperation(s->session, sync, 1000);
     } while (err == MFX_WRN_IN_EXECUTION);
     if (err < 0) {
-        av_log(ctx, AV_LOG_ERROR, "Error synchronizing the operation: %d\n", err);
-        ret = AVERROR_UNKNOWN;
+        ret = ff_qsvvpp_print_error(ctx, err, "Error synchronizing the operation");
         goto fail;
     }
 
@@ -629,7 +643,7 @@ static const AVOption options[] = {
 };
 
 static const AVClass qsvscale_class = {
-    .class_name = "qsvscale",
+    .class_name = "scale_qsv",
     .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,

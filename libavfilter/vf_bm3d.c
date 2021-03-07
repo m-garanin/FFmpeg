@@ -153,7 +153,7 @@ static const AVOption bm3d_options[] = {
     { "final",  "final estimate",
         0,                      AV_OPT_TYPE_CONST, {.i64=FINAL}, 0,            0, FLAGS, "mode" },
     { "ref",    "have reference stream",
-        OFFSET(ref),            AV_OPT_TYPE_INT,    {.i64=0},    0,            1, FLAGS },
+        OFFSET(ref),            AV_OPT_TYPE_BOOL,  {.i64=0},     0,            1, FLAGS },
     { "planes", "set planes to filter",
         OFFSET(planes),         AV_OPT_TYPE_INT,   {.i64=7},     0,           15, FLAGS },
     { NULL }
@@ -181,6 +181,11 @@ static int query_formats(AVFilterContext *ctx)
         AV_PIX_FMT_YUV420P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV444P16,
         AV_PIX_FMT_GBRP, AV_PIX_FMT_GBRP9, AV_PIX_FMT_GBRP10,
         AV_PIX_FMT_GBRP12, AV_PIX_FMT_GBRP14, AV_PIX_FMT_GBRP16,
+        AV_PIX_FMT_YUVA420P,  AV_PIX_FMT_YUVA422P,   AV_PIX_FMT_YUVA444P,
+        AV_PIX_FMT_YUVA444P9, AV_PIX_FMT_YUVA444P10, AV_PIX_FMT_YUVA444P12, AV_PIX_FMT_YUVA444P16,
+        AV_PIX_FMT_YUVA422P9, AV_PIX_FMT_YUVA422P10, AV_PIX_FMT_YUVA422P12, AV_PIX_FMT_YUVA422P16,
+        AV_PIX_FMT_YUVA420P9, AV_PIX_FMT_YUVA420P10, AV_PIX_FMT_YUVA420P16,
+        AV_PIX_FMT_GBRAP,     AV_PIX_FMT_GBRAP10,    AV_PIX_FMT_GBRAP12,    AV_PIX_FMT_GBRAP16,
         AV_PIX_FMT_NONE
     };
 
@@ -438,7 +443,7 @@ static void basic_block_filtering(BM3DContext *s, const uint8_t *src, int src_li
         }
     }
 
-    threshold[0] = s->hard_threshold * s->sigma;
+    threshold[0] = s->hard_threshold * s->sigma * M_SQRT2 * block_size * block_size * (1 << (s->depth - 8)) / 255.f;
     threshold[1] = threshold[0] * sqrtf(2.f);
     threshold[2] = threshold[0] * 2.f;
     threshold[3] = threshold[0] * sqrtf(8.f);
@@ -937,27 +942,19 @@ static av_cold int init(AVFilterContext *ctx)
     }
 
     pad.type         = AVMEDIA_TYPE_VIDEO;
-    pad.name         = av_strdup("source");
+    pad.name         = "source";
     pad.config_props = config_input;
-    if (!pad.name)
-        return AVERROR(ENOMEM);
 
-    if ((ret = ff_insert_inpad(ctx, 0, &pad)) < 0) {
-        av_freep(&pad.name);
+    if ((ret = ff_insert_inpad(ctx, 0, &pad)) < 0)
         return ret;
-    }
 
     if (s->ref) {
         pad.type         = AVMEDIA_TYPE_VIDEO;
-        pad.name         = av_strdup("reference");
+        pad.name         = "reference";
         pad.config_props = NULL;
-        if (!pad.name)
-            return AVERROR(ENOMEM);
 
-        if ((ret = ff_insert_inpad(ctx, 1, &pad)) < 0) {
-            av_freep(&pad.name);
+        if ((ret = ff_insert_inpad(ctx, 1, &pad)) < 0)
             return ret;
-        }
     }
 
     return 0;
@@ -1021,9 +1018,6 @@ static av_cold void uninit(AVFilterContext *ctx)
 {
     BM3DContext *s = ctx->priv;
     int i;
-
-    for (i = 0; i < ctx->nb_inputs; i++)
-        av_freep(&ctx->input_pads[i].name);
 
     if (s->ref)
         ff_framesync_uninit(&s->fs);

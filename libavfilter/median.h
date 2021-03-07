@@ -30,6 +30,8 @@ typedef struct MedianContext {
 
     int planes;
     int radius;
+    int radiusV;
+    float percentile;
 
     int planewidth[4];
     int planeheight[4];

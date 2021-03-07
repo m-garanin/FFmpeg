@@ -72,8 +72,8 @@ static int parse_line(const char *line, int64_t *value, int64_t *value2)
                 fracval *= 10;
             for (;p2 - p1 > 7 + 1; p1++)
                 fracval /= 10;
-            if (intval > 0) intval += fracval;
-            else            intval -= fracval;
+            if (intval > 0) intval = av_sat_add64(intval, fracval);
+            else            intval = av_sat_sub64(intval, fracval);
             line += p2;
         } else
             line += p1;
@@ -154,8 +154,10 @@ static int mpsub_read_header(AVFormatContext *s)
     }
 
     st = avformat_new_stream(s, NULL);
-    if (!st)
-        return AVERROR(ENOMEM);
+    if (!st) {
+        res = AVERROR(ENOMEM);
+        goto end;
+    }
     avpriv_set_pts_info(st, 64, pts_info.den, pts_info.num);
     st->codecpar->codec_type = AVMEDIA_TYPE_SUBTITLE;
     st->codecpar->codec_id   = AV_CODEC_ID_TEXT;

@@ -121,8 +121,9 @@ static int query_formats(AVFilterContext *ctx)
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
-    RubberBandContext *s = inlink->dst->priv;
-    AVFilterLink *outlink = inlink->dst->outputs[0];
+    AVFilterContext *ctx = inlink->dst;
+    RubberBandContext *s = ctx->priv;
+    AVFilterLink *outlink = ctx->outputs[0];
     AVFrame *out;
     int ret = 0, nb_samples;
 
@@ -149,7 +150,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
 
     av_frame_free(&in);
-    return ret  < 0 ? ret : nb_samples;
+    if (ff_inlink_queued_samples(inlink) >= s->nb_samples)
+        ff_filter_set_ready(ctx, 100);
+    return ret < 0 ? ret : nb_samples;
 }
 
 static int config_input(AVFilterLink *inlink)
@@ -209,6 +212,7 @@ static int process_command(AVFilterContext *ctx, const char *cmd, const char *ar
 
     rubberband_set_time_ratio(s->rbs, 1. / s->tempo);
     rubberband_set_pitch_scale(s->rbs, s->pitch);
+    s->nb_samples = rubberband_get_samples_required(s->rbs);
 
     return 0;
 }

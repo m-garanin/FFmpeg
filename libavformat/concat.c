@@ -49,7 +49,7 @@ static av_cold int concat_close(URLContext *h)
     struct concat_nodes *nodes = data->nodes;
 
     for (i = 0; i != data->length; i++)
-        err |= ffurl_close(nodes[i].uc);
+        err |= ffurl_closep(&nodes[i].uc);
 
     av_freep(&data->nodes);
 
@@ -73,15 +73,11 @@ static av_cold int concat_open(URLContext *h, const char *uri, int flags)
 
     for (i = 0, len = 1; uri[i]; i++) {
         if (uri[i] == *AV_CAT_SEPARATOR) {
-            /* integer overflow */
-            if (++len == UINT_MAX / sizeof(*nodes)) {
-                av_freep(&h->priv_data);
-                return AVERROR(ENAMETOOLONG);
-            }
+            len++;
         }
     }
 
-    if (!(nodes = av_realloc(NULL, sizeof(*nodes) * len)))
+    if (!(nodes = av_realloc_array(NULL, len, sizeof(*nodes))))
         return AVERROR(ENOMEM);
     else
         data->nodes = nodes;

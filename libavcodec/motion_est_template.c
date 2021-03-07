@@ -34,7 +34,7 @@
     const int av_unused ymin= c->ymin;\
     const int av_unused xmax= c->xmax;\
     const int av_unused ymax= c->ymax;\
-    uint8_t *mv_penalty= c->current_mv_penalty;\
+    const uint8_t *mv_penalty = c->current_mv_penalty; \
     const int pred_x= c->pred_x;\
     const int pred_y= c->pred_y;\
 
@@ -157,8 +157,8 @@ static int no_sub_motion_search(MpegEncContext * s,
                                   int src_index, int ref_index,
                                   int size, int h)
 {
-    (*mx_ptr)<<=1;
-    (*my_ptr)<<=1;
+    (*mx_ptr) *= 2;
+    (*my_ptr) *= 2;
     return dmin;
 }
 

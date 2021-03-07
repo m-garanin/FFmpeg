@@ -64,64 +64,16 @@ int ff_qsv_codec_id_to_mfx(enum AVCodecID codec_id)
     case AV_CODEC_ID_VP9:
         return MFX_CODEC_VP9;
 #endif
+#if QSV_VERSION_ATLEAST(1, 34)
+    case AV_CODEC_ID_AV1:
+        return MFX_CODEC_AV1;
+#endif
 
     default:
         break;
     }
 
     return AVERROR(ENOSYS);
-}
-
-
-static const struct {
-    enum AVCodecID codec_id;
-    int codec_profile;
-    int mfx_profile;
-} qsv_profile_map[] = {
-#define MAP(c, p, v) { AV_CODEC_ID_ ## c, FF_PROFILE_ ## p, MFX_PROFILE_ ## v }
-    MAP(MPEG2VIDEO,  MPEG2_SIMPLE,    MPEG2_SIMPLE ),
-    MAP(MPEG2VIDEO,  MPEG2_MAIN,      MPEG2_MAIN   ),
-    MAP(MPEG2VIDEO,  MPEG2_HIGH,      MPEG2_HIGH   ),
-
-    MAP(H264,        H264_BASELINE,   AVC_BASELINE ),
-    MAP(H264,        H264_CONSTRAINED_BASELINE, AVC_BASELINE),
-#if QSV_VERSION_ATLEAST(1, 3)
-    MAP(H264,        H264_EXTENDED,   AVC_EXTENDED ),
-#endif
-    MAP(H264,        H264_MAIN,       AVC_MAIN     ),
-    MAP(H264,        H264_HIGH,       AVC_HIGH     ),
-    MAP(H264,        H264_HIGH_422,   AVC_HIGH_422 ),
-
-#if QSV_VERSION_ATLEAST(1, 8)
-    MAP(HEVC,        HEVC_MAIN,       HEVC_MAIN    ),
-    MAP(HEVC,        HEVC_MAIN_10,    HEVC_MAIN10  ),
-    MAP(HEVC,        HEVC_MAIN_STILL_PICTURE,    HEVC_MAINSP ),
-#endif
-#if QSV_VERSION_ATLEAST(1, 16)
-    MAP(HEVC,        HEVC_REXT,       HEVC_REXT    ),
-#endif
-
-    MAP(VC1,         VC1_SIMPLE,      VC1_SIMPLE   ),
-    MAP(VC1,         VC1_MAIN,        VC1_MAIN     ),
-    MAP(VC1,         VC1_COMPLEX,     VC1_ADVANCED ),
-    MAP(VC1,         VC1_ADVANCED,    VC1_ADVANCED ),
-#undef MAP
-};
-
-int ff_qsv_profile_to_mfx(enum AVCodecID codec_id, int profile)
-{
-    int i;
-    if (profile == FF_PROFILE_UNKNOWN)
-        return MFX_PROFILE_UNKNOWN;
-
-    for (i = 0; i < FF_ARRAY_ELEMS(qsv_profile_map); i++) {
-        if (qsv_profile_map[i].codec_id != codec_id)
-            continue;
-        if (qsv_profile_map[i].codec_profile == profile)
-            return qsv_profile_map[i].mfx_profile;
-    }
-
-    return MFX_PROFILE_UNKNOWN;
 }
 
 int ff_qsv_level_to_mfx(enum AVCodecID codec_id, int level)
@@ -247,6 +199,12 @@ enum AVPixelFormat ff_qsv_map_fourcc(uint32_t fourcc)
     case MFX_FOURCC_NV12: return AV_PIX_FMT_NV12;
     case MFX_FOURCC_P010: return AV_PIX_FMT_P010;
     case MFX_FOURCC_P8:   return AV_PIX_FMT_PAL8;
+#if CONFIG_VAAPI
+    case MFX_FOURCC_YUY2: return AV_PIX_FMT_YUYV422;
+#if QSV_VERSION_ATLEAST(1, 27)
+    case MFX_FOURCC_Y210: return AV_PIX_FMT_Y210;
+#endif
+#endif
     }
     return AV_PIX_FMT_NONE;
 }
@@ -263,6 +221,18 @@ int ff_qsv_map_pixfmt(enum AVPixelFormat format, uint32_t *fourcc)
     case AV_PIX_FMT_P010:
         *fourcc = MFX_FOURCC_P010;
         return AV_PIX_FMT_P010;
+#if CONFIG_VAAPI
+    case AV_PIX_FMT_YUV422P:
+    case AV_PIX_FMT_YUYV422:
+        *fourcc = MFX_FOURCC_YUY2;
+        return AV_PIX_FMT_YUYV422;
+#if QSV_VERSION_ATLEAST(1, 27)
+    case AV_PIX_FMT_YUV422P10:
+    case AV_PIX_FMT_Y210:
+        *fourcc = MFX_FOURCC_Y210;
+        return AV_PIX_FMT_Y210;
+#endif
+#endif
     default:
         return AVERROR(ENOSYS);
     }
@@ -391,6 +361,7 @@ static int ff_qsv_set_display_handle(AVCodecContext *avctx, QSVSession *qs)
     av_dict_set(&child_device_opts, "driver",        "iHD",  0);
 
     ret = av_hwdevice_ctx_create(&qs->va_device_ref, AV_HWDEVICE_TYPE_VAAPI, NULL, child_device_opts, 0);
+    av_dict_free(&child_device_opts);
     if (ret < 0) {
         av_log(avctx, AV_LOG_ERROR, "Failed to create a VAAPI device.\n");
         return ret;
@@ -404,8 +375,6 @@ static int ff_qsv_set_display_handle(AVCodecContext *avctx, QSVSession *qs)
             return ff_qsv_print_error(avctx, ret, "Error during set display handle\n");
         }
     }
-
-    av_dict_free(&child_device_opts);
 
     return 0;
 }

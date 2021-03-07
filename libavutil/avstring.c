@@ -136,6 +136,7 @@ end:
     return p;
 }
 
+#if FF_API_D2STR
 char *av_d2str(double d)
 {
     char *str = av_malloc(16);
@@ -143,6 +144,7 @@ char *av_d2str(double d)
         snprintf(str, 16, "%f", d);
     return str;
 }
+#endif
 
 #define WHITESPACES " \n\t\r"
 
@@ -258,15 +260,17 @@ char *av_strireplace(const char *str, const char *from, const char *to)
 const char *av_basename(const char *path)
 {
     char *p;
+#if HAVE_DOS_PATHS
+    char *q, *d;
+#endif
 
     if (!path || *path == '\0')
         return ".";
 
     p = strrchr(path, '/');
 #if HAVE_DOS_PATHS
-    char *q = strrchr(path, '\\');
-    char *d = strchr(path, ':');
-
+    q = strrchr(path, '\\');
+    d = strchr(path, ':');
     p = FFMAX3(p, q, d);
 #endif
 

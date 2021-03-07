@@ -29,7 +29,7 @@
 
 #include "libavutil/channel_layout.h"
 #include "libavutil/float_dsp.h"
-#include "libavutil/mem.h"
+#include "libavutil/mem_internal.h"
 #include "libavutil/thread.h"
 #include "avcodec.h"
 #include "internal.h"
@@ -386,7 +386,7 @@ static av_cold int wmavoice_decode_init(AVCodecContext *ctx)
                ctx->extradata_size);
         return AVERROR_INVALIDDATA;
     }
-    if (ctx->block_align <= 0) {
+    if (ctx->block_align <= 0 || ctx->block_align > (1<<22)) {
         av_log(ctx, AV_LOG_ERROR, "Invalid block alignment %d.\n", ctx->block_align);
         return AVERROR_INVALIDDATA;
     }
@@ -432,6 +432,9 @@ static av_cold int wmavoice_decode_init(AVCodecContext *ctx)
         av_log(ctx, AV_LOG_ERROR, "Invalid VBM tree; broken extradata?\n");
         return AVERROR_INVALIDDATA;
     }
+
+    if (ctx->sample_rate >= INT_MAX / (256 * 37))
+        return AVERROR_INVALIDDATA;
 
     s->min_pitch_val    = ((ctx->sample_rate << 8)      /  400 + 50) >> 8;
     s->max_pitch_val    = ((ctx->sample_rate << 8) * 37 / 2000 + 50) >> 8;
@@ -633,12 +636,14 @@ static void calc_input_response(WMAVoiceContext *s, float *lpcs,
     for (n = 0; n <= 64; n++) {
         float pwr;
 
-        idx = FFMAX(0, lrint((max - lpcs[n]) * irange) - 1);
+        idx = lrint((max - lpcs[n]) * irange - 1);
+        idx = FFMAX(0, idx);
         pwr = wmavoice_denoise_power_table[s->denoise_strength][idx];
         lpcs[n] = angle_mul * pwr;
 
         /* 70.57 =~ 1/log10(1.0331663) */
-        idx = (pwr * gain_mul - 0.0295) * 70.570526123;
+        idx = av_clipf((pwr * gain_mul - 0.0295) * 70.570526123, 0, INT_MAX / 2);
+
         if (idx > 127) { // fall back if index falls outside table range
             coeffs[n] = wmavoice_energy_table[127] *
                         powf(1.0331663, idx - 127);
@@ -1520,7 +1525,7 @@ static int synth_frame(AVCodecContext *ctx, GetBitContext *gb, int frame_idx,
 
         /* "pitch-diff-per-sample" for calculation of pitch per sample */
         s->pitch_diff_sh16 =
-            ((cur_pitch_val - s->last_pitch_val) << 16) / MAX_FRAMESIZE;
+            (cur_pitch_val - s->last_pitch_val) * (1 << 16) / MAX_FRAMESIZE;
     }
 
     /* Global gain (if silence) and pitch-adaptive window coordinates */
@@ -1840,6 +1845,9 @@ static int parse_packet_header(WMAVoiceContext *s)
     skip_bits(gb, 4);          // packet sequence number
     s->has_residual_lsps = get_bits1(gb);
     do {
+        if (get_bits_left(gb) < 6 + s->spillover_bitsize)
+            return AVERROR_INVALIDDATA;
+
         res = get_bits(gb, 6); // number of superframes per packet
                                // (minus first one if there is spillover)
         n_superframes += res;
@@ -1857,7 +1865,7 @@ static int parse_packet_header(WMAVoiceContext *s)
  * @param size size of the source data, in bytes
  * @param gb bit I/O context specifying the current position in the source.
  *           data. This function might use this to align the bit position to
- *           a whole-byte boundary before calling #avpriv_copy_bits() on aligned
+ *           a whole-byte boundary before calling #ff_copy_bits() on aligned
  *           source data
  * @param nbits the amount of bits to copy from source to target
  *
@@ -1878,7 +1886,7 @@ static void copy_bits(PutBitContext *pb,
     rmn_bits &= 7; rmn_bytes >>= 3;
     if ((rmn_bits = FFMIN(rmn_bits, nbits)) > 0)
         put_bits(pb, rmn_bits, get_bits(gb, rmn_bits));
-    avpriv_copy_bits(pb, data + size - rmn_bytes,
+    ff_copy_bits(pb, data + size - rmn_bytes,
                  FFMIN(nbits - rmn_bits, rmn_bytes << 3));
 }
 
@@ -1998,5 +2006,6 @@ AVCodec ff_wmavoice_decoder = {
     .close            = wmavoice_decode_end,
     .decode           = wmavoice_decode_packet,
     .capabilities     = AV_CODEC_CAP_SUBFRAMES | AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY,
+    .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
     .flush            = wmavoice_flush,
 };

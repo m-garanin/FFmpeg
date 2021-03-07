@@ -70,6 +70,9 @@ static void clear_plane(AVCodecContext *avctx, AVFrame *frame)
     RASCContext *s = avctx->priv_data;
     uint8_t *dst = frame->data[0];
 
+    if (!dst)
+        return;
+
     for (int y = 0; y < avctx->height; y++) {
         memset(dst, 0, avctx->width * s->bpp);
         dst += frame->linesize[0];
@@ -124,6 +127,8 @@ static int decode_fint(AVCodecContext *avctx,
         clear_plane(avctx, s->frame1);
         return 0;
     }
+    if (bytestream2_get_bytes_left(gb) < 72)
+        return AVERROR_INVALIDDATA;
 
     bytestream2_skip(gb, 8);
     w = bytestream2_get_le32(gb);

@@ -23,32 +23,80 @@
 #include <stddef.h>
 #include "thread.h"
 #include "mem.h"
+#include "mem_internal.h"
 #include "avassert.h"
 #include "attributes.h"
 
 #ifdef TX_FLOAT
 #define TX_NAME(x) x ## _float
+#define SCALE_TYPE float
 typedef float FFTSample;
 typedef AVComplexFloat FFTComplex;
 #elif defined(TX_DOUBLE)
 #define TX_NAME(x) x ## _double
+#define SCALE_TYPE double
 typedef double FFTSample;
 typedef AVComplexDouble FFTComplex;
+#elif defined(TX_INT32)
+#define TX_NAME(x) x ## _int32
+#define SCALE_TYPE float
+typedef int32_t FFTSample;
+typedef AVComplexInt32 FFTComplex;
 #else
 typedef void FFTComplex;
 #endif
 
 #if defined(TX_FLOAT) || defined(TX_DOUBLE)
-#define BF(x, y, a, b) do {                                                    \
-        x = (a) - (b);                                                         \
-        y = (a) + (b);                                                         \
-    } while (0)
 
 #define CMUL(dre, dim, are, aim, bre, bim) do {                                \
         (dre) = (are) * (bre) - (aim) * (bim);                                 \
         (dim) = (are) * (bim) + (aim) * (bre);                                 \
     } while (0)
+
+#define SMUL(dre, dim, are, aim, bre, bim) do {                                \
+        (dre) = (are) * (bre) - (aim) * (bim);                                 \
+        (dim) = (are) * (bim) - (aim) * (bre);                                 \
+    } while (0)
+
+#define UNSCALE(x) (x)
+#define RESCALE(x) (x)
+
+#define FOLD(a, b) ((a) + (b))
+
+#elif defined(TX_INT32)
+
+/* Properly rounds the result */
+#define CMUL(dre, dim, are, aim, bre, bim) do {                                \
+        int64_t accu;                                                          \
+        (accu)  = (int64_t)(bre) * (are);                                      \
+        (accu) -= (int64_t)(bim) * (aim);                                      \
+        (dre)   = (int)(((accu) + 0x40000000) >> 31);                          \
+        (accu)  = (int64_t)(bim) * (are);                                      \
+        (accu) += (int64_t)(bre) * (aim);                                      \
+        (dim)   = (int)(((accu) + 0x40000000) >> 31);                          \
+    } while (0)
+
+#define SMUL(dre, dim, are, aim, bre, bim) do {                                \
+        int64_t accu;                                                          \
+        (accu)  = (int64_t)(bre) * (are);                                      \
+        (accu) -= (int64_t)(bim) * (aim);                                      \
+        (dre)   = (int)(((accu) + 0x40000000) >> 31);                          \
+        (accu)  = (int64_t)(bim) * (are);                                      \
+        (accu) -= (int64_t)(bre) * (aim);                                      \
+        (dim)   = (int)(((accu) + 0x40000000) >> 31);                          \
+    } while (0)
+
+#define UNSCALE(x) ((double)x/2147483648.0)
+#define RESCALE(x) (av_clip64(lrintf((x) * 2147483648.0), INT32_MIN, INT32_MAX))
+
+#define FOLD(x, y) ((int)((x) + (unsigned)(y) + 32) >> 6)
+
 #endif
+
+#define BF(x, y, a, b) do {                                                    \
+        x = (a) - (b);                                                         \
+        y = (a) + (b);                                                         \
+    } while (0)
 
 #define CMUL3(c, a, b)                                                         \
     CMUL((c).re, (c).im, (a).re, (a).im, (b).re, (b).im)
@@ -58,20 +106,25 @@ typedef void FFTComplex;
 
 /* Used by asm, reorder with care */
 struct AVTXContext {
-    int n;              /* Nptwo part */
-    int m;              /* Ptwo part */
-    int inv;            /* Is inverted */
+    int n;              /* Non-power-of-two part */
+    int m;              /* Power-of-two part */
+    int inv;            /* Is inverse */
     int type;           /* Type */
+    uint64_t flags;     /* Flags */
+    double scale;       /* Scale */
 
     FFTComplex *exptab; /* MDCT exptab */
     FFTComplex *tmp;    /* Temporary buffer needed for all compound transforms */
     int        *pfatab; /* Input/Output mapping for compound transforms */
     int        *revtab; /* Input mapping for power of two transforms */
+    int   *inplace_idx; /* Required indices to revtab for in-place transforms */
 };
 
 /* Shared functions */
+int ff_tx_type_is_mdct(enum AVTXType type);
 int ff_tx_gen_compound_mapping(AVTXContext *s);
-int ff_tx_gen_ptwo_revtab(AVTXContext *s);
+int ff_tx_gen_ptwo_revtab(AVTXContext *s, int invert_lookup);
+int ff_tx_gen_ptwo_inplace_revtab_idx(AVTXContext *s);
 
 /* Also used by SIMD init */
 static inline int split_radix_permutation(int i, int n, int inverse)
@@ -96,6 +149,9 @@ int ff_tx_init_mdct_fft_float(AVTXContext *s, av_tx_fn *tx,
 int ff_tx_init_mdct_fft_double(AVTXContext *s, av_tx_fn *tx,
                                enum AVTXType type, int inv, int len,
                                const void *scale, uint64_t flags);
+int ff_tx_init_mdct_fft_int32(AVTXContext *s, av_tx_fn *tx,
+                              enum AVTXType type, int inv, int len,
+                              const void *scale, uint64_t flags);
 
 typedef struct CosTabsInitOnce {
     void (*func)(void);

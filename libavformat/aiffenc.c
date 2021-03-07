@@ -23,6 +23,7 @@
 
 #include "libavutil/intfloat.h"
 #include "libavutil/opt.h"
+#include "libavcodec/packet_internal.h"
 #include "avformat.h"
 #include "internal.h"
 #include "aiff.h"
@@ -49,7 +50,7 @@ static int put_id3v2_tags(AVFormatContext *s, AIFFOutputContext *aiff)
     AVIOContext *pb = s->pb;
     AVPacketList *pict_list = aiff->pict_list;
 
-    if (!s->metadata && !aiff->pict_list)
+    if (!s->metadata && !s->nb_chapters && !aiff->pict_list)
         return 0;
 
     avio_wl32(pb, MKTAG('I', 'D', '3', ' '));
@@ -199,9 +200,6 @@ static int aiff_write_header(AVFormatContext *s)
     avpriv_set_pts_info(s->streams[aiff->audio_stream_idx], 64, 1,
                         s->streams[aiff->audio_stream_idx]->codecpar->sample_rate);
 
-    /* Data is starting here */
-    avio_flush(pb);
-
     return 0;
 }
 
@@ -223,8 +221,8 @@ static int aiff_write_packet(AVFormatContext *s, AVPacket *pkt)
         if (s->streams[pkt->stream_index]->nb_frames >= 1)
             return 0;
 
-        return ff_packet_list_put(&aiff->pict_list, &aiff->pict_list_end,
-                                  pkt, FF_PACKETLIST_FLAG_REF_PACKET);
+        return avpriv_packet_list_put(&aiff->pict_list, &aiff->pict_list_end,
+                                  pkt, av_packet_ref, 0);
     }
 
     return 0;
@@ -266,8 +264,6 @@ static int aiff_write_trailer(AVFormatContext *s)
         file_size = avio_tell(pb);
         avio_seek(pb, aiff->form, SEEK_SET);
         avio_wb32(pb, file_size - aiff->form - 4);
-
-        avio_flush(pb);
     }
 
     return ret;
@@ -277,7 +273,7 @@ static void aiff_deinit(AVFormatContext *s)
 {
     AIFFOutputContext *aiff = s->priv_data;
 
-    ff_packet_list_free(&aiff->pict_list, &aiff->pict_list_end);
+    avpriv_packet_list_free(&aiff->pict_list, &aiff->pict_list_end);
 }
 
 #define OFFSET(x) offsetof(AIFFOutputContext, x)
@@ -309,6 +305,6 @@ AVOutputFormat ff_aiff_muxer = {
     .write_packet      = aiff_write_packet,
     .write_trailer     = aiff_write_trailer,
     .deinit            = aiff_deinit,
-    .codec_tag         = (const AVCodecTag* const []){ ff_codec_aiff_tags, 0 },
+    .codec_tag         = ff_aiff_codec_tags_list,
     .priv_class        = &aiff_muxer_class,
 };
